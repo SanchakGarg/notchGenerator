@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import ezdxf
+import ezdxf.bbox
 import numpy as np
 
 from .curves import (
@@ -349,6 +350,11 @@ def write_result(
             f"{audit.errors[0].message}",
             count=len(audit.errors),
         )
+
+    extents = ezdxf.bbox.extents(msp)
+    if extents.has_data:
+        doc.header["$EXTMIN"] = extents.extmin
+        doc.header["$EXTMAX"] = extents.extmax
 
     doc.saveas(out_path)
     # Only the basename goes into the report — the full path is a server detail that has no
