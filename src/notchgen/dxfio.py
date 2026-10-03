@@ -1,13 +1,8 @@
-"""Reading and writing DXF. The only module that touches ezdxf documents directly.
-
-Editing happens in the loaded document rather than in a fresh one, so every untouched
-entity keeps its exact original representation — splines in particular are never
-re-interpolated. Negative-Z circles are normalized to positive-Z OCS while preserving their
-world-coordinate geometry, matching the representation LibreCAD writes before Fusion import.
-"""
+"""Reading and writing DXF. The only module that touches ezdxf documents directly."""
 
 from __future__ import annotations
 
+import io
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +11,7 @@ import ezdxf
 import ezdxf.bbox
 import numpy as np
 from ezdxf import blkrefs
+from ezdxf.lldxf.tagwriter import TagWriter
 
 from .curves import (
     ArcCurve,
@@ -297,6 +293,72 @@ def _normalize_circle_ocs(circle) -> bool:
     return True
 
 
+def _portable_document(source, insunits: int):
+    """Copy finished model-space geometry into a clean, broadly supported DXF document."""
+    output = ezdxf.new("R2007")
+    output.header["$INSUNITS"] = insunits
+    output.header["$MEASUREMENT"] = (
+        1 if insunits == 4 else source.header.get("$MEASUREMENT", 0)
+    )
+
+    source_layers = {layer.dxf.name.casefold(): layer for layer in source.layers}
+    layer_names = {entity.dxf.layer for entity in source.modelspace()}
+    for name in sorted(layer_names, key=str.casefold):
+        if name.casefold() == "0":
+            continue
+        source_layer = source_layers.get(name.casefold())
+        lineweight = source_layer.dxf.get("lineweight", -3) if source_layer else -3
+        output.layers.new(
+            name,
+            dxfattribs={"color": 7, "linetype": "CONTINUOUS", "lineweight": lineweight},
+        )
+
+    target = output.modelspace()
+    for entity in source.modelspace():
+        target.add_foreign_entity(entity)
+        copied = target[-1]
+        copied.dxf.layer = entity.dxf.layer
+        copied.dxf.color = 256
+        copied.dxf.linetype = "BYLAYER"
+        copied.dxf.lineweight = -1
+        if copied.dxftype() == "LWPOLYLINE":
+            copied.dxf.const_width = copied.dxf.get("const_width", 0.0)
+
+    if "Defpoints" in output.layers and not any(
+        entity.dxf.layer.casefold() == "defpoints" for entity in target
+    ):
+        output.layers.remove("Defpoints")
+
+    extents = ezdxf.bbox.extents(target)
+    if extents.has_data:
+        target.dxf.extmin = extents.extmin
+        target.dxf.extmax = extents.extmax
+        output.header["$EXTMIN"] = extents.extmin
+        output.header["$EXTMAX"] = extents.extmax
+    return output
+
+
+def _save_portable_document(doc, out_path: str) -> None:
+    """Write after removing ezdxf's private metadata, which LibreCAD also strips."""
+    doc.commit_pending_changes()
+    doc.classes.add_required_classes(doc.dxfversion)
+    doc.update_all()
+    if "EZDXF_META" in doc.rootdict:
+        doc.rootdict["EZDXF_META"].clear()
+        doc.rootdict.remove("EZDXF_META")
+    for appid in ("EZDXF", "HATCHBACKGROUNDCOLOR"):
+        doc.appids.discard(appid)
+
+    with io.open(
+        out_path,
+        mode="wt",
+        encoding=doc.output_encoding,
+        errors="dxfreplace",
+    ) as stream:
+        tagwriter = TagWriter(stream, dxfversion=doc.dxfversion, write_handles=True)
+        doc.export_sections(tagwriter)
+
+
 def write_result(
     doc,
     mapping: dict[str, str],
@@ -306,7 +368,7 @@ def write_result(
     report: Report,
     single_layer: bool = True,
 ) -> None:
-    """Rewrite the document in place to hold only the notched outer profile and the holes."""
+    """Write only the notched outer profile and its holes in a clean DXF document."""
     msp = doc.modelspace()
     outer_layer = layers_for(mapping, "outer")[0]
     interior_layer = next(iter(layers_for(mapping, "interior")), None)
@@ -394,36 +456,23 @@ def write_result(
             count=len(removed_layers),
         )
 
-    # Fusion's own export carries invalid owner handles in its OBJECTS dictionaries. ezdxf
-    # repairs those when reading but the repair is only in memory, so without this the written
-    # file inherits them and strict importers reject it as a translation failure.
-    audit = doc.audit()
-    if audit.fixes:
-        report.info(
-            "repaired-structure",
-            f"Repaired {len(audit.fixes)} structural problem(s) inherited from the source file "
-            f"so the output imports cleanly.",
-            count=len(audit.fixes),
-        )
-    if audit.errors:
+    # Carry only finished model-space geometry forward. A fresh R2007 document
+    # removes stale source dictionaries and handles that some strict importers reject.
+    source_insunits = doc.header.get("$INSUNITS", 0)
+    output_doc = _portable_document(doc, source_insunits)
+    output_audit = output_doc.audit()
+    if output_audit.errors:
         report.warn(
             "unrepaired-structure",
-            f"{len(audit.errors)} structural problem(s) in the source file could not be "
-            f"repaired; the output may be rejected on import. First: "
-            f"{audit.errors[0].message}",
-            count=len(audit.errors),
+            f"{len(output_audit.errors)} structural problem(s) remain in the output. First: "
+            f"{output_audit.errors[0].message}",
+            count=len(output_audit.errors),
         )
-
-    extents = ezdxf.bbox.extents(msp)
-    if extents.has_data:
-        msp.dxf.extmin = extents.extmin
-        msp.dxf.extmax = extents.extmax
-
-    doc.saveas(out_path)
+    _save_portable_document(output_doc, out_path)
     # Only the basename goes into the report — the full path is a server detail that has no
     # business being shown in the browser.
     report.info(
         "written",
-        f"Wrote {Path(out_path).name}: {len(list(msp))} entities on "
-        f"{len({e.dxf.layer for e in msp})} layer(s).",
+        f"Wrote {Path(out_path).name}: {len(list(output_doc.modelspace()))} entities on "
+        f"{len({e.dxf.layer for e in output_doc.modelspace()})} layer(s).",
     )

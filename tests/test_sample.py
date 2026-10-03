@@ -208,6 +208,27 @@ def test_written_file_drops_empty_defpoints_layer(sample_path, tmp_path):
     assert "OUTER_PROFILES" in doc.layers
 
 
+def test_written_file_uses_a_clean_portable_document(sample_path, tmp_path):
+    res = pipeline.process(sample_path, MAPPING, Config())
+    out = tmp_path / "portable.dxf"
+    pipeline.save(res, str(out))
+
+    doc = ezdxf.readfile(out)
+    assert doc.dxfversion == "AC1021"
+    assert b"\r\nDefpoints\r\n" not in out.read_bytes()
+    assert "EZDXF_META" not in doc.rootdict
+    assert {appid.dxf.name for appid in doc.appids} == {"ACAD"}
+    assert not any(entity.dxftype() == "DICTIONARYVAR" for entity in doc.objects)
+    assert {layer.dxf.name for layer in doc.layers} == {
+        "0",
+        "OUTER_PROFILES",
+        "Defpoints",
+    }
+    assert all(entity.dxf.color == 256 for entity in doc.modelspace())
+    assert all(entity.dxf.linetype == "BYLAYER" for entity in doc.modelspace())
+    assert all(entity.dxf.lineweight == -1 for entity in doc.modelspace())
+
+
 def test_surviving_splines_are_untouched(sample_path, tmp_path):
     res = pipeline.process(sample_path, MAPPING, Config())
     out = tmp_path / "out.dxf"
