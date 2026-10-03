@@ -137,6 +137,14 @@ def test_holes_render_on_the_same_side_as_the_profile(tmp_path):
     )
     assert centre_of(after)[0] == pytest.approx(30.0, abs=1e-3)
 
+    source_circle = next(e for e in result.doc.modelspace() if e.dxftype() == "CIRCLE")
+    world_center = source_circle.ocs().to_wcs(source_circle.dxf.center)
+    out = tmp_path / "normalized.dxf"
+    pipeline.save(result, str(out))
+    written_circle = next(e for e in ezdxf.readfile(out).modelspace() if e.dxftype() == "CIRCLE")
+    assert tuple(written_circle.dxf.extrusion) == pytest.approx((0.0, 0.0, 1.0))
+    assert tuple(written_circle.dxf.center) == pytest.approx(tuple(world_center))
+
 
 def test_the_sample_holes_sit_where_the_file_says(sample_path):
     """A +Z file must be unaffected by the OCS handling."""

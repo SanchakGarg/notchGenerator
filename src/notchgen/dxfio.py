@@ -2,7 +2,8 @@
 
 Editing happens in the loaded document rather than in a fresh one, so every untouched
 entity keeps its exact original representation — splines in particular are never
-re-interpolated.
+re-interpolated. Negative-Z circles are normalized to positive-Z OCS while preserving their
+world-coordinate geometry, matching the representation LibreCAD writes before Fusion import.
 """
 
 from __future__ import annotations
@@ -283,6 +284,19 @@ def _add_curve(msp, curve: Curve, layer: str) -> None:
         raise TypeError(f"cannot write {type(curve).__name__}")
 
 
+def _normalize_circle_ocs(circle) -> bool:
+    """Write a -Z circle in +Z OCS without moving its world-coordinate center."""
+    if not np.allclose(circle.dxf.extrusion, (0.0, 0.0, -1.0), atol=1e-12):
+        return False
+    center = circle.ocs().to_wcs(circle.dxf.center)
+    thickness = circle.dxf.get("thickness", 0.0)
+    circle.dxf.center = center
+    circle.dxf.extrusion = (0.0, 0.0, 1.0)
+    if thickness:
+        circle.dxf.thickness = -thickness
+    return True
+
+
 def write_result(
     doc,
     mapping: dict[str, str],
@@ -318,6 +332,16 @@ def write_result(
             _add_curve(msp, curve, outer_layer)
     for curve in added:
         _add_curve(msp, curve, outer_layer)
+
+    normalized_circles = sum(
+        _normalize_circle_ocs(e) for e in msp if e.dxftype() == "CIRCLE"
+    )
+    if normalized_circles:
+        report.info(
+            "normalized-circles",
+            f"Normalized {normalized_circles} circle(s) to positive-Z OCS without moving them.",
+            count=normalized_circles,
+        )
 
     if single_layer:
         if outer_layer not in doc.layers:
