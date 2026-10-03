@@ -5,7 +5,7 @@ description = "Add bend-relief notches to Fusion 360 sheet-metal flat-pattern DX
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "ezdxf>=1.3",
+    "ezdxf>=1.3.5",
     "numpy>=1.26",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

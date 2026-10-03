@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ezdxf
 import ezdxf.bbox
+from ezdxf import blkrefs
 import pytest
 
 from conftest import MAPPING
@@ -176,6 +177,35 @@ def test_written_file_has_valid_modelspace_extents(sample_path, tmp_path):
     extents = ezdxf.bbox.extents(doc.modelspace())
     assert tuple(doc.header["$EXTMIN"]) == pytest.approx(tuple(extents.extmin))
     assert tuple(doc.header["$EXTMAX"]) == pytest.approx(tuple(extents.extmax))
+
+
+def test_written_file_removes_unreferenced_blocks(sample_path, tmp_path):
+    res = pipeline.process(sample_path, MAPPING, Config())
+    out = tmp_path / "out.dxf"
+    pipeline.save(res, str(out))
+
+    doc = ezdxf.readfile(out)
+    assert blkrefs.find_unreferenced_blocks(doc) == set()
+
+
+def test_written_file_drops_empty_defpoints_layer(sample_path, tmp_path):
+    source = ezdxf.readfile(sample_path)
+    if "Defpoints" not in source.layers:
+        source.layers.new("Defpoints", dxfattribs={"color": 7})
+    assert "Defpoints" in source.layers
+    source_path = tmp_path / "with_defpoints.dxf"
+    source.saveas(source_path)
+
+    res = pipeline.process(str(source_path), MAPPING, Config())
+    out = tmp_path / "out.dxf"
+    pipeline.save(res, str(out))
+
+    doc = ezdxf.readfile(out)
+    # ezdxf synthesizes Defpoints while reading newer DXF versions, even if it was
+    # removed from the file written by the generator.
+    assert b"\r\nDefpoints\r\n" not in out.read_bytes()
+    assert "0" in doc.layers
+    assert "OUTER_PROFILES" in doc.layers
 
 
 def test_surviving_splines_are_untouched(sample_path, tmp_path):

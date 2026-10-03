@@ -14,6 +14,7 @@ from pathlib import Path
 import ezdxf
 import ezdxf.bbox
 import numpy as np
+from ezdxf import blkrefs
 
 from .curves import (
     ArcCurve,
@@ -330,6 +331,44 @@ def write_result(
     for layer in (*layers_for(mapping, "bend"), *layers_for(mapping, "extent")):
         if layer in doc.layers and layer not in (outer_layer, interior_layer):
             doc.layers.remove(layer)
+
+    # Orphaned dimension-arrow blocks can be rendered at the origin by some importers.
+    unused_blocks = blkrefs.find_unreferenced_blocks(doc)
+    for name in sorted(unused_blocks):
+        doc.blocks.delete_block(name, safe=False)
+    if unused_blocks:
+        report.info(
+            "purged-blocks",
+            f"Removed {len(unused_blocks)} unused block definition(s) from the output.",
+            count=len(unused_blocks),
+        )
+
+    used_layers = {
+        e.dxf.layer.casefold()
+        for layout in doc.layouts
+        for e in layout
+    }
+    used_layers.update(
+        e.dxf.layer.casefold()
+        for block in doc.blocks
+        if not block.is_any_layout
+        for e in block
+    )
+    kept_layers = {"0", outer_layer.casefold()}
+    if interior_layer:
+        kept_layers.add(interior_layer.casefold())
+    removed_layers = []
+    for layer in list(doc.layers):
+        name = layer.dxf.name
+        if name.casefold() not in used_layers | kept_layers:
+            doc.layers.remove(name)
+            removed_layers.append(name)
+    if removed_layers:
+        report.info(
+            "purged-layers",
+            f"Removed {len(removed_layers)} unused layer(s) from the output.",
+            count=len(removed_layers),
+        )
 
     # Fusion's own export carries invalid owner handles in its OBJECTS dictionaries. ezdxf
     # repairs those when reading but the repair is only in memory, so without this the written
