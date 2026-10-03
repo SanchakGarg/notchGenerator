@@ -353,8 +353,8 @@ def write_result(
 
     extents = ezdxf.bbox.extents(msp)
     if extents.has_data:
-        doc.header["$EXTMIN"] = extents.extmin
-        doc.header["$EXTMAX"] = extents.extmax
+        msp.dxf.extmin = extents.extmin
+        msp.dxf.extmax = extents.extmax
 
     doc.saveas(out_path)
     # Only the basename goes into the report — the full path is a server detail that has no

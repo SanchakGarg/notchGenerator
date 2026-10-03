@@ -7,6 +7,7 @@ evaluating the file's B-splines with De Boor's algorithm and ray-casting the res
 from __future__ import annotations
 
 import ezdxf
+import ezdxf.bbox
 import pytest
 
 from conftest import MAPPING
@@ -164,6 +165,17 @@ def test_write_result_defaults_to_a_single_layer(sample_path, tmp_path):
     loops, _ = build_loops(holes, Config().stitch_tol)
     hole_loops = [lp for lp in loops if lp.area() == pytest.approx(50.311, abs=0.01)]
     assert len(hole_loops) == 2
+
+
+def test_written_file_has_valid_modelspace_extents(sample_path, tmp_path):
+    res = pipeline.process(sample_path, MAPPING, Config())
+    out = tmp_path / "out.dxf"
+    pipeline.save(res, str(out))
+
+    doc = ezdxf.readfile(out)
+    extents = ezdxf.bbox.extents(doc.modelspace())
+    assert tuple(doc.header["$EXTMIN"]) == pytest.approx(tuple(extents.extmin))
+    assert tuple(doc.header["$EXTMAX"]) == pytest.approx(tuple(extents.extmax))
 
 
 def test_surviving_splines_are_untouched(sample_path, tmp_path):
